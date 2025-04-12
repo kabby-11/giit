@@ -1,2 +1,2 @@
 # giit
-Making my our git!
+Making my own git!
