@@ -11,8 +11,10 @@
 
 import hashlib
 import os
+import re
 import zlib
-from repository.repo_utils import repo_file, repo_path
+from object.refs.refs_utils import ref_resolve
+from repository.repo_utils import repo_dir, repo_file, repo_path
 
 
 def object_read(repo, sha):
@@ -63,7 +65,7 @@ def object_read(repo, sha):
 
 #now we will create how to write the object
 def object_write(obj, repo = None):
-    #Serialize the object
+    #Serialize the object (encrypt it)
     data = obj.serialize()
 
     result = obj.format + b' ' + str(len(data)).encode("ascii") + b'\x00' + data
@@ -87,15 +89,51 @@ def object_write(obj, repo = None):
 def object_find(repo, name, format=None, follow=True):
     return name
 
-def object_hash(f, format, repo = None):
-    data = f.read()
+def object_resolve(repo, name):
+    """If name is HEAD, it will just resolve .git/HEAD;
+    If name is a full hash, this hash is returned unmodified.
+    If name looks like a short hash, it will collect objects whose full hash begin with this short hash.
+    At last, it will resolve tags and branches matching name."""
 
-    #Compute the sha1 hash of the object
-    match format:
-        case b'commit' : c=GitCommit
-        case b'tree'   : c=GitTree
-        case b'blob'   : c=GitBlob
-        case b'tag'    : c=GitTag
-        case _         : raise Exception("Unknown object type: " + format.decode("ascii"))
+    """This function is aware of :
+    -the HEAD literal
+          -short and long hashes
+          -tags and branches
+          -remote branches"""
+    
+    candidates = list()
+    hashRE = re.compile(r"^[0-9A-Fa-f]{4,40}$")
 
-    return object_write(c, repo)
+    #Abort for empty name
+    if not name.strip():
+        return None
+    
+    #If HEAD is nonambiguous
+    if name == "HEAD":
+        return [ref_resolve(repo, "HEAD")]
+    
+    #If it's a hex string, try for a full hash
+    if hashRE.match(name):
+        name = name.lower()
+        prefix = name[0:2]
+        path = repo_dir(repo, "objects", prefix, mkdir=False)
+        if path:
+            rem = name[2:]
+            for f in os.listdir(path):
+                if f.startswith(rem):
+                    candidates.append(prefix + f)
+    
+       # Try for references.
+    as_tag = ref_resolve(repo, "refs/tags/" + name)
+    if as_tag: # Did we find a tag?
+        candidates.append(as_tag)
+
+    as_branch = ref_resolve(repo, "refs/heads/" + name)
+    if as_branch: # Did we find a branch?
+        candidates.append(as_branch)
+
+    as_remote_branch = ref_resolve(repo, "refs/remotes/" + name)
+    if as_remote_branch: # Did we find a remote branch?
+        candidates.append(as_remote_branch)
+
+    return candidates
